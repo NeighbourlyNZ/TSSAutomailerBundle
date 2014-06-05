@@ -115,6 +115,7 @@ class AutomailerSpool extends \Swift_ConfigurableSpool
         // Iterate over 50 at a time.
         // Otherwise the initial query gets too long.
         do {
+
             $left = $left - $perLimit;
             $mails = $automailerRepository->findNext($perLimit);
 
@@ -137,6 +138,8 @@ class AutomailerSpool extends \Swift_ConfigurableSpool
                     $this->_em->persist($mail);
                 }
 
+                $this->_em->flush();
+
                 if ($this->getMessageLimit() && $count >= $this->getMessageLimit()) {
                     break(2);
                 }
@@ -146,9 +149,9 @@ class AutomailerSpool extends \Swift_ConfigurableSpool
                 }
             }
 
-            $this->_em->flush();
             $this->_em->clear();
             gc_collect_cycles();
+
         } while ($left > 0);
 
         $this->_em->flush();
