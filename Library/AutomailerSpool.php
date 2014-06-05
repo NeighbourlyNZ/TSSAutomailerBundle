@@ -54,15 +54,15 @@ class AutomailerSpool extends \Swift_ConfigurableSpool
     public function queueMessage(\Swift_Mime_Message $message)
     {
         $mail = new Am;
-    	$mail->setSubject($message->getSubject());
-    	$fromArray = $message->getFrom();
-    	$fromArrayKeys = array_keys($fromArray);
-    	$mail->setFromEmail($fromArrayKeys[0]);
+        $mail->setSubject($message->getSubject());
+        $fromArray = $message->getFrom();
+        $fromArrayKeys = array_keys($fromArray);
+        $mail->setFromEmail($fromArrayKeys[0]);
         $mail->setFromName(isset($fromArray[$fromArrayKeys[0]])?$fromArray[$fromArrayKeys[0]] : $fromArrayKeys[0]);
-    	$toArray = $message->getTo();
-    	$toArrayKeys = array_keys($toArray);
-    	$mail->setToEmail($toArrayKeys[0]);
-    	$mail->setBody($message->getBody());
+        $toArray = $message->getTo();
+        $toArrayKeys = array_keys($toArray);
+        $mail->setToEmail($toArrayKeys[0]);
+        $mail->setBody($message->getBody());
         $mail->setAltBody(strip_tags(preg_replace(
             array(
                 '@<head[^>]*?>.*?</head>@siu',
@@ -72,10 +72,10 @@ class AutomailerSpool extends \Swift_ConfigurableSpool
             ),
             "",
             $message->getBody())));
-    	$mail->setIsHtml(($message->getContentType()=='text/html') ? true : false);
-    	$mail->setSwiftMessage($message);
-    	
-    	$this->_em->persist($mail);
+        $mail->setIsHtml(($message->getContentType()=='text/html') ? true : false);
+        $mail->setSwiftMessage($message);
+
+        $this->_em->persist($mail);
         $this->_em->flush();
     }
 
@@ -104,46 +104,54 @@ class AutomailerSpool extends \Swift_ConfigurableSpool
         $failedRecipients = (array) $failedRecipients;
         $count = 0;
         $time = time();
-        
+
         $limit = !$this->getMessageLimit() ? 50 : $this->getMessageLimit();
-        
-        $mails = $this->_em->getRepository("TSSAutomailerBundle:Automailer")->findNext($limit);
+        $perLimit = 50;
+        $left = $limit;
 
-        //first mark all for sending
-        foreach ($mails as $mail) {
-            
-            $mail->setIsSending(true);
-            $mail->setStartedSendingAt(new \DateTime());
-            $this->_em->persist($mail);
+        $this->_em->getConnection()->getConfiguration()->setSQLLogger(null);
+        $automailerRepository = $this->_em->getRepository("TSSAutomailerBundle:Automailer");
+
+        // Iterate over 50 at a time.
+        // Otherwise the initial query gets too long.
+        do {
+            $left = $left - $perLimit;
+            $mails = $automailerRepository->findNext($perLimit);
+
+            foreach ($mails as $mail) {
+                $mail->setIsSending(true);
+                $mail->setStartedSendingAt(new \DateTime());
+                $this->_em->persist($mail);
+                $this->_em->flush();
+
+                if ($transport->send($mail->getSwiftMessage(), $failedRecipients)) {
+                    $count++;
+
+                    $mail->setIsSending(false);
+                    $mail->setIsSent(true);
+                    $mail->setSentAt(new \DateTime());
+                    $this->_em->persist($mail);
+                } else {
+                    $mail->setIsSending(false);
+                    $mail->setIsFailed(true);
+                    $this->_em->persist($mail);
+                }
+
+                if ($this->getMessageLimit() && $count >= $this->getMessageLimit()) {
+                    break(2);
+                }
+
+                if ($this->getTimeLimit() && (time() - $time) >= $this->getTimeLimit()) {
+                    break(2);
+                }
+            }
+
             $this->_em->flush();
-        }
+            $this->_em->clear();
+            gc_collect_cycles();
+        } while ($left > 0);
 
-        foreach ($mails as $mail) {
-            if($transport->send($mail->getSwiftMessage(), $failedRecipients))
-            {
-                $count++;
-                
-                $mail->setIsSending(false);
-                $mail->setIsSent(true);
-                $mail->setSentAt(new \DateTime());
-                $this->_em->persist($mail);
-                $this->_em->flush();
-            }
-            else {
-                $mail->setIsSending(false);
-                $mail->setIsFailed(true);
-                $this->_em->persist($mail);
-                $this->_em->flush();
-            }
-
-            if ($this->getMessageLimit() && $count >= $this->getMessageLimit()) {
-                break;
-            }
-
-            if ($this->getTimeLimit() && (time() - $time) >= $this->getTimeLimit()) {
-                break;
-            }
-        }
+        $this->_em->flush();
 
         return $count;
     }
